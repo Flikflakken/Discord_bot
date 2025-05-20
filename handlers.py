@@ -17,6 +17,13 @@ ROLE_ICONS = {
     "dps": "<:dps:1310400661569146890>"
 }
 
+# Discord Role IDs
+ROLE_IDS = {
+    "tank": 1374336518495146095,
+    "healer": 1374336572538753104,
+    "dps": 1374336600703762543
+}
+
 active_groups = {}
 
 @app_commands.guild_only()
@@ -75,15 +82,32 @@ class DungeonCommands(commands.Cog):
         status_embed = self.create_group_status(group_info)
         view = RoleButtons(interaction.channel_id)
         
+        # Create ping message for needed roles
+        ping_message = self.create_role_ping_message(your_role)
+        
         # Send and store message
         await interaction.response.send_message(
-            f"🌀 Group started for **{dungeon}** at **+{key_level}**!",
+            f"{ping_message}\n🌀 Group started for **{dungeon}** at **+{key_level}**!",
             embed=status_embed,
-            view=view
+            view=view,
+            allowed_mentions=discord.AllowedMentions(roles=True)
         )
         
         # Add group to active groups
         active_groups[interaction.channel_id] = group_info
+
+    def create_role_ping_message(self, filled_role: Role) -> str:
+        """Create a message that pings all needed roles except the one already filled."""
+        needed_roles = []
+        
+        if filled_role != Role.TANK:
+            needed_roles.append(f"<@&{ROLE_IDS['tank']}>")
+        if filled_role != Role.HEALER:
+            needed_roles.append(f"<@&{ROLE_IDS['healer']}>")
+        if filled_role != Role.DPS:
+            needed_roles.append(f"<@&{ROLE_IDS['dps']}>")
+            
+        return " ".join(needed_roles)
 
     @app_commands.command(name="canceldungeon", description="Cancel the current Mythic+ group")
     async def canceldungeon(self, interaction: discord.Interaction):
