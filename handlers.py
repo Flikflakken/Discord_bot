@@ -4,6 +4,8 @@ from discord import app_commands
 from discord.ext import commands
 from blizzard_api import get_current_dungeons, CURRENT_DUNGEONS
 from enum import Enum
+from datetime import datetime, timedelta
+import re
 
 class Role(str, Enum):
     TANK = "tank"
@@ -26,6 +28,26 @@ ROLE_IDS = {
 
 active_groups = {}
 
+def parse_time(time_str: str) -> datetime:
+    """Parse time string in HH:MM format and return datetime object for today/tomorrow."""
+    if time_str.lower() == "now":
+        return datetime.now()
+
+    # Regular expression to match HH:MM format
+    if not re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', time_str):
+        raise ValueError("Time must be in HH:MM format (e.g., 14:30)")
+
+    # Parse the time
+    hour, minute = map(int, time_str.split(':'))
+    now = datetime.now()
+    scheduled_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    # If the time is in the past, assume it's for tomorrow
+    if scheduled_time < now:
+        scheduled_time += timedelta(days=1)
+
+    return scheduled_time
+
 @app_commands.guild_only()
 class DungeonCommands(commands.Cog):
     def __init__(self, bot, guild_id):
@@ -46,15 +68,23 @@ class DungeonCommands(commands.Cog):
     @app_commands.describe(
         dungeon="Dungeon name",
         key_level="Key level (0-20)",
-        your_role="Your role in the group"
+        your_role="Your role in the group",
+        start_time="When to start (e.g., 14:30 or 'now'). Default is now."
     )
     async def startdungeon(
         self,
         interaction: discord.Interaction,
         dungeon: str,
         key_level: app_commands.Range[int, 0, 20],
-        your_role: Role
+        your_role: Role,
+        start_time: str = "now"
     ):
+        try:
+            scheduled_time = parse_time(start_time)
+        except ValueError as e:
+            await interaction.response.send_message(f"❌ {str(e)}", ephemeral=True)
+            return
+
         if dungeon not in self.dungeon_pool:
             await interaction.response.send_message(f"❌ Invalid dungeon. Available: {', '.join(self.dungeon_pool)}", ephemeral=True)
             return
@@ -71,7 +101,8 @@ class DungeonCommands(commands.Cog):
             "healer": None,
             "dps": [],
             "players": set(),  # Track all players in group
-            "creator": interaction.user  # Track who created the group
+            "creator": interaction.user,  # Track who created the group
+            "start_time": scheduled_time  # Store the start time
         }
 
         # Auto-assign creator to their selected role
@@ -90,9 +121,12 @@ class DungeonCommands(commands.Cog):
         # Create ping message for needed roles
         ping_message = self.create_role_ping_message(your_role)
         
+        # Create start time message
+        time_msg = "Starting now!" if start_time.lower() == "now" else f"Scheduled for: {scheduled_time.strftime('%H:%M')}"
+        
         # Send and store message
         await interaction.response.send_message(
-            f"{ping_message}\n🌀 Group started for **{dungeon}** at **+{key_level}**!",
+            f"{ping_message}\n🌀 Group started for **{dungeon}** at **+{key_level}**!\n⏰ {time_msg}",
             embed=status_embed,
             view=view,
             allowed_mentions=discord.AllowedMentions(roles=True)
@@ -160,6 +194,15 @@ class DungeonCommands(commands.Cog):
             title=f"{group['dungeon']} +{group['key_level']}",
             color=discord.Color.blue()
         )
+
+        # Add start time as first field if it's not "now"
+        if (group['start_time'] - datetime.now()).total_seconds() > 60:  # If more than 1 minute in the future
+            time_str = group['start_time'].strftime('%H:%M')
+            status.add_field(
+                name="⏰ Start Time",
+                value=f"**{time_str}**",
+                inline=False
+            )
         
         # Tank status
         tank_name = group['tank'].display_name if group['tank'] else "Not filled"
@@ -300,8 +343,13 @@ class GroupView(discord.ui.View):
 
         # Check if group is ready
         if group["tank"] and group["healer"] and len(group["dps"]) == 3:
+            # Get time info for completion message
+            time_info = ""
+            if (group['start_time'] - datetime.now()).total_seconds() > 60:
+                time_info = f"\n⏰ Starting at: {group['start_time'].strftime('%H:%M')}"
+
             await interaction.channel.send(
-                f"✅ Group for **{group['dungeon']} +{group['key_level']}** is ready!\n"
+                f"✅ Group for **{group['dungeon']} +{group['key_level']}** is ready!{time_info}\n"
                 "```\n"
                 f"{ROLE_ICONS['tank']} Tank:   {group['tank'].display_name}\n"
                 f"{ROLE_ICONS['healer']} Healer: {group['healer'].display_name}\n"
