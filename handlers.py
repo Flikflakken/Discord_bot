@@ -2,7 +2,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from blizzard_api import get_current_dungeons
+from blizzard_api import get_current_dungeons, CURRENT_DUNGEONS
 from enum import Enum
 
 class Role(str, Enum):
@@ -31,11 +31,16 @@ class DungeonCommands(commands.Cog):
     def __init__(self, bot, guild_id):
         self.bot = bot
         self.guild_id = guild_id
-        self.dungeon_pool = []
+        self.dungeon_pool = CURRENT_DUNGEONS  # Use pre-sorted list immediately
 
     async def cog_load(self):
-        self.dungeon_pool = await get_current_dungeons()
-        print(f"🔁 Dungeon pool loaded: {self.dungeon_pool}")
+        # Update dungeon pool from API if possible
+        try:
+            self.dungeon_pool = await get_current_dungeons()
+            print(f"🔁 Dungeon pool loaded: {self.dungeon_pool}")
+        except Exception as e:
+            print(f"Using default dungeon pool due to error: {e}")
+            pass  # Keep using CURRENT_DUNGEONS if API fails
 
     @app_commands.command(name="startdungeon", description="Start a Mythic+ group")
     @app_commands.describe(
@@ -80,7 +85,7 @@ class DungeonCommands(commands.Cog):
         
         # Create initial status message
         status_embed = self.create_group_status(group_info)
-        view = RoleButtons(interaction.channel_id)
+        view = GroupView(interaction.channel_id)
         
         # Create ping message for needed roles
         ping_message = self.create_role_ping_message(your_role)
@@ -100,12 +105,14 @@ class DungeonCommands(commands.Cog):
         """Create a message that pings all needed roles except the one already filled."""
         needed_roles = []
         
+        # Always include Tank and Healer if not filled
         if filled_role != Role.TANK:
             needed_roles.append(f"<@&{ROLE_IDS['tank']}>")
         if filled_role != Role.HEALER:
             needed_roles.append(f"<@&{ROLE_IDS['healer']}>")
-        if filled_role != Role.DPS:
-            needed_roles.append(f"<@&{ROLE_IDS['dps']}>")
+            
+        # Always include DPS role, even if creator is DPS (since we need 3)
+        needed_roles.append(f"<@&{ROLE_IDS['dps']}>")
             
         return " ".join(needed_roles)
 
@@ -140,10 +147,12 @@ class DungeonCommands(commands.Cog):
         interaction: discord.Interaction,
         current: str,
     ) -> list[app_commands.Choice[str]]:
+        # Fast, case-insensitive filtering
+        current_lower = current.lower()
         return [
             app_commands.Choice(name=dungeon, value=dungeon)
             for dungeon in self.dungeon_pool
-            if current.lower() in dungeon.lower()
+            if current_lower in dungeon.lower()
         ][:25]
 
     def create_group_status(self, group):
@@ -152,17 +161,17 @@ class DungeonCommands(commands.Cog):
             color=discord.Color.blue()
         )
         
-        # Tank status (Shield icon for tank)
+        # Tank status
         tank_name = group['tank'].display_name if group['tank'] else "Not filled"
         tank_status = "✅" if group['tank'] else "❌"
         status.add_field(name=f"{ROLE_ICONS['tank']} Tank", value=f"{tank_status} {tank_name}", inline=False)
         
-        # Healer status (Green cross for healer)
+        # Healer status
         healer_name = group['healer'].display_name if group['healer'] else "Not filled"
         healer_status = "✅" if group['healer'] else "❌"
         status.add_field(name=f"{ROLE_ICONS['healer']} Healer", value=f"{healer_status} {healer_name}", inline=False)
         
-        # DPS status (Crossed swords for DPS)
+        # DPS status
         dps_list = "\n".join([f"✅ {dps.display_name}" for dps in group['dps']])
         if not dps_list:
             dps_list = "❌ No DPS signed up"
@@ -173,7 +182,7 @@ class DungeonCommands(commands.Cog):
         
         return status
 
-class RoleButtons(discord.ui.View):
+class GroupView(discord.ui.View):
     def __init__(self, channel_id):
         super().__init__(timeout=None)
         self.channel_id = channel_id
@@ -189,6 +198,58 @@ class RoleButtons(discord.ui.View):
     @discord.ui.button(label="DPS", style=discord.ButtonStyle.secondary, custom_id="join_dps", emoji=ROLE_ICONS['dps'])
     async def dps(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.assign_role(interaction, "dps")
+
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, custom_id="leave_group", emoji="🚪")
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.leave_group(interaction)
+
+    async def leave_group(self, interaction: discord.Interaction):
+        group = active_groups.get(self.channel_id)
+
+        if not group:
+            await interaction.response.send_message("❌ No active group.", ephemeral=True)
+            return
+
+        user = interaction.user
+
+        # Check if user is in the group
+        if user not in group["players"]:
+            await interaction.response.send_message("❌ You're not in this group.", ephemeral=True)
+            return
+
+        # Remove user from their role
+        role_left = None
+        if group["tank"] == user:
+            group["tank"] = None
+            role_left = "Tank"
+        elif group["healer"] == user:
+            group["healer"] = None
+            role_left = "Healer"
+        elif user in group["dps"]:
+            group["dps"].remove(user)
+            role_left = "DPS"
+
+        # Remove from players set
+        group["players"].remove(user)
+
+        # Don't allow creator to leave unless they're the last person
+        if user == group["creator"] and len(group["players"]) > 0:
+            await interaction.response.send_message("❌ As the group creator, you can't leave while others are in the group. Use `/canceldungeon` instead.", ephemeral=True)
+            return
+
+        # If creator leaves and they're the last person, remove the group
+        if user == group["creator"] and len(group["players"]) == 0:
+            del active_groups[self.channel_id]
+            await interaction.message.delete()
+            await interaction.response.send_message("Group has been removed as the creator left.", ephemeral=True)
+            return
+
+        # Update the embed in the message
+        status_embed = DungeonCommands.create_group_status(None, group)
+        await interaction.message.edit(embed=status_embed)
+        
+        # Send confirmation to user
+        await interaction.response.send_message(f"You have left the group (was {role_left}).", ephemeral=True)
 
     async def assign_role(self, interaction: discord.Interaction, role):
         group = active_groups.get(self.channel_id)

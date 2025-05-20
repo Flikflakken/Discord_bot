@@ -14,6 +14,18 @@ CLIENT_SECRET = os.getenv('BLIZZARD_CLIENT_SECRET')
 if not CLIENT_ID or not CLIENT_SECRET:
     raise ValueError("Missing Blizzard API credentials. Please check your .env file.")
 
+# Current Season 2 dungeons for The War Within (pre-sorted)
+CURRENT_DUNGEONS = sorted([
+    "Operation: Floodgate",
+    "Cinderbrew Meadery",
+    "Darkflame Cleft",
+    "The Rookery",
+    "Priory of the Sacred Flame",
+    "The MOTHERLODE!!",
+    "Theater of Pain",
+    "Operation: Mechagon: Workshop"
+])
+
 async def get_access_token():
     url = "https://oauth.battle.net/token"
     data = {"grant_type": "client_credentials"}
@@ -27,32 +39,11 @@ async def get_current_dungeons():
     try:
         token = await get_access_token()
         headers = {"Authorization": f"Bearer {token}"}
-
-        # Current Season 2 dungeons for The War Within
-        dungeons = [
-            "Operation: Floodgate",
-            "Cinderbrew Meadery",
-            "Darkflame Cleft",
-            "The Rookery",
-            "Priory of the Sacred Flame",
-            "The MOTHERLODE!!",
-            "Theater of Pain",
-            "Operation: Mechagon: Workshop"
-        ]
         
-        print(f"📜 Current dungeon pool: {json.dumps(dungeons, indent=2)}")
-        return sorted(dungeons)
+        print(f"📜 Current dungeon pool: {json.dumps(CURRENT_DUNGEONS, indent=2)}")
+        return CURRENT_DUNGEONS
 
     except Exception as e:
         print(f"❌ Error fetching dungeons: {e}")
-        # Return a hardcoded list as fallback
-        return [
-            "Operation: Floodgate",
-            "Cinderbrew Meadery",
-            "Darkflame Cleft",
-            "The Rookery",
-            "Priory of the Sacred Flame",
-            "The MOTHERLODE!!",
-            "Theater of Pain",
-            "Operation: Mechagon: Workshop"
-        ]
+        # Return pre-sorted list as fallback
+        return CURRENT_DUNGEONS

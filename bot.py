@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-from handlers import DungeonCommands, RoleButtons
+from handlers import DungeonCommands, GroupView
 import os
 import traceback
 from dotenv import load_dotenv
@@ -35,7 +35,7 @@ class MyBot(commands.Bot):
                 await interaction.response.send_message("Pong! 🏓")
             
             # Add persistent view for buttons
-            self.add_view(RoleButtons(None))
+            self.add_view(GroupView(None))
             
             # Register commands for the specific guild
             print("Syncing commands...")
