@@ -26,7 +26,7 @@ ROLE_IDS = {
     "dps": 1374336600703762543
 }
 
-active_groups = {}
+active_groups = []  # Using a list instead of dict to store multiple groups
 
 def parse_time(time_str: str) -> datetime:
     """Parse time string in HH:MM format and return datetime object for today/tomorrow."""
@@ -89,10 +89,7 @@ class DungeonCommands(commands.Cog):
             await interaction.response.send_message(f"❌ Invalid dungeon. Available: {', '.join(self.dungeon_pool)}", ephemeral=True)
             return
 
-        # Check if there's already an active group in this channel
-        if interaction.channel_id in active_groups:
-            await interaction.response.send_message("❌ There's already an active group in this channel. Use `/canceldungeon` to remove it first.", ephemeral=True)
-            return
+        # No need to check for existing groups - multiple groups are now allowed
 
         group_info = {
             "dungeon": dungeon,
@@ -132,8 +129,11 @@ class DungeonCommands(commands.Cog):
             allowed_mentions=discord.AllowedMentions(roles=True)
         )
         
-        # Add group to active groups
-        active_groups[interaction.channel_id] = group_info
+        # Add group to active groups list with message ID for reference
+        group_message = await interaction.original_response()
+        group_info["message_id"] = group_message.id
+        group_info["channel_id"] = interaction.channel_id
+        active_groups.append(group_info)
 
     def create_role_ping_message(self, filled_role: Role) -> str:
         """Create a message that pings all needed roles except the one already filled."""
@@ -151,11 +151,37 @@ class DungeonCommands(commands.Cog):
         return " ".join(needed_roles)
 
     @app_commands.command(name="canceldungeon", description="Cancel the current Mythic+ group")
-    async def canceldungeon(self, interaction: discord.Interaction):
-        group = active_groups.get(interaction.channel_id)
+    @app_commands.describe(
+        message_id="The ID of the group message to cancel (Right click the group message -> Copy Message ID)"
+    )
+    async def canceldungeon(self, interaction: discord.Interaction, message_id: str = None):
+        if not message_id:
+            # List all groups in the channel
+            channel_groups = [g for g in active_groups if g["channel_id"] == interaction.channel_id]
+            if not channel_groups:
+                await interaction.response.send_message("❌ No active groups in this channel.", ephemeral=True)
+                return
+            
+            if len(channel_groups) == 1:
+                group = channel_groups[0]
+                message_id = str(group["message_id"])
+            else:
+                # Show list of groups
+                groups_list = "\n".join([
+                    f"• {g['dungeon']} +{g['key_level']} (Created by {g['creator'].display_name}) - ID: {g['message_id']}"
+                    for g in channel_groups
+                ])
+                await interaction.response.send_message(
+                    f"Multiple groups found. Please specify which group to cancel using `/canceldungeon message_id:ID`\n\n{groups_list}",
+                    ephemeral=True
+                )
+                return
+
+        # Find the group with the specified message ID
+        group = next((g for g in active_groups if str(g["message_id"]) == message_id), None)
         
         if not group:
-            await interaction.response.send_message("❌ No active group in this channel.", ephemeral=True)
+            await interaction.response.send_message("❌ Group not found. Please check the message ID.", ephemeral=True)
             return
 
         # Only allow the group creator or administrators to cancel
@@ -164,7 +190,7 @@ class DungeonCommands(commands.Cog):
             return
 
         # Remove the group
-        del active_groups[interaction.channel_id]
+        active_groups.remove(group)
         
         # Send confirmation
         embed = discord.Embed(
@@ -247,7 +273,8 @@ class GroupView(discord.ui.View):
         await self.leave_group(interaction)
 
     async def leave_group(self, interaction: discord.Interaction):
-        group = active_groups.get(self.channel_id)
+        # Find the group associated with this message
+        group = next((g for g in active_groups if g["message_id"] == interaction.message.id), None)
 
         if not group:
             await interaction.response.send_message("❌ No active group.", ephemeral=True)
@@ -282,7 +309,7 @@ class GroupView(discord.ui.View):
 
         # If creator leaves and they're the last person, remove the group
         if user == group["creator"] and len(group["players"]) == 0:
-            del active_groups[self.channel_id]
+            active_groups.remove(group)
             await interaction.message.delete()
             await interaction.response.send_message("Group has been removed as the creator left.", ephemeral=True)
             return
@@ -295,7 +322,8 @@ class GroupView(discord.ui.View):
         await interaction.response.send_message(f"You have left the group (was {role_left}).", ephemeral=True)
 
     async def assign_role(self, interaction: discord.Interaction, role):
-        group = active_groups.get(self.channel_id)
+        # Find the group associated with this message
+        group = next((g for g in active_groups if g["message_id"] == interaction.message.id), None)
 
         if not group:
             await interaction.response.send_message("❌ No active group.", ephemeral=True)
@@ -356,4 +384,4 @@ class GroupView(discord.ui.View):
                 f"{ROLE_ICONS['dps']} DPS:    {', '.join([dps.display_name for dps in group['dps']])}\n"
                 "```"
             )
-            del active_groups[self.channel_id]
+            active_groups.remove(group)
