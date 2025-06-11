@@ -268,9 +268,17 @@ class GroupView(discord.ui.View):
     async def dps(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.assign_role(interaction, "dps")
 
-    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, custom_id="leave_group", emoji="🚪")
+    @discord.ui.button(label="Leave", style=discord.ButtonStyle.danger, custom_id="leave_group", emoji="🚪", row=1)
     async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.leave_group(interaction)
+
+    @discord.ui.button(label="Copy ID", style=discord.ButtonStyle.secondary, custom_id="copy_id", emoji="📋", row=1)
+    async def copy_id(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Send the ID in a way that's easy to copy
+        await interaction.response.send_message(
+            f"Click the ID below to copy it:\n`{interaction.message.id}`", 
+            ephemeral=True
+        )
 
     async def leave_group(self, interaction: discord.Interaction):
         # Find the group associated with this message
